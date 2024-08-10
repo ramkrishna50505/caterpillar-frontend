@@ -42,6 +42,7 @@ const VoiceForm: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const { transcript, startListening, stopListening } = useSpeechRecognition();
   const [imagePaths, setImagePaths] = useState<string[]>([]);
+  const [recentPhoto, setRecentPhoto] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -55,6 +56,14 @@ const VoiceForm: React.FC = () => {
       handleSubmit();
     } else if (lowerTranscript.includes('capture photo') || lowerTranscript.includes('take picture')) {
       handleCapture();
+    } else if (lowerTranscript.includes('take photo')) {
+      takePhoto();
+    } else if (lowerTranscript.includes('keep photo')) {
+      keepPhoto();
+    } else if (lowerTranscript.includes('discard photo')) {
+      discardPhoto();
+    } else if (lowerTranscript.includes('close camera')) {
+      handleCloseCamera();
     } else {
       if (activeField.startsWith('tireCondition')) {
         const selectedOption = tireConditionOptions.find(option => 
@@ -71,7 +80,7 @@ const VoiceForm: React.FC = () => {
 
   const handleNextField = () => {
     if (formData[activeField].trim() === '') {
-      setError(`Please fill in the ${activeField} field before moving to the next.` );
+      setError(`Please fill in the ${activeField} field before moving to the next.`);
       return;
     }
 
@@ -99,13 +108,9 @@ const VoiceForm: React.FC = () => {
       const formDataToSend = new FormData();
       formDataToSend.append('tires_data', JSON.stringify(tiresData));
       
-      // If you have actual image files, you would append them like this:
-      // imagePaths.forEach((imagePath, index) => {
-      //   formDataToSend.append('images', imagePath, image_${index}.jpg);
-      // });
-      
-      // For now, we'll just append an empty array for images
-      formDataToSend.append('images', new Blob([]));
+      imagePaths.forEach((imagePath, index) => {
+        formDataToSend.append('images', dataURItoBlob(imagePath), `image_${index}.jpg`);
+      });
   
       const response = await fetch('http://localhost:8000/inspection/7/set-tires', {
         method: 'POST',
@@ -177,14 +182,42 @@ const VoiceForm: React.FC = () => {
       if (context) {
         context.drawImage(videoRef.current, 0, 0, 640, 480);
         const imagePath = canvasRef.current.toDataURL('image/jpeg');
-        setImagePaths(prevPaths => [...prevPaths, imagePath]);
+        setRecentPhoto(imagePath);
         
-        handleCloseCamera();
-
         // Provide audio feedback
-        const utterance = new SpeechSynthesisUtterance("Photo captured successfully");
+        const utterance = new SpeechSynthesisUtterance("Photo captured. Say 'keep photo' to save, 'discard photo' to try again, or 'close camera' to exit.");
         window.speechSynthesis.speak(utterance);
       }
+    }
+  };
+
+  const keepPhoto = () => {
+    if (recentPhoto) {
+      setImagePaths(prevPaths => [...prevPaths, recentPhoto]);
+      setRecentPhoto(null);
+      
+      // Provide audio feedback
+      const utterance = new SpeechSynthesisUtterance("Photo saved. Camera closed.");
+      window.speechSynthesis.speak(utterance);
+      
+      handleCloseCamera();
+    } else {
+      // Provide audio feedback if there's no recent photo
+      const utterance = new SpeechSynthesisUtterance("No recent photo to save. Please take a photo first.");
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  const discardPhoto = () => {
+    if (recentPhoto) {
+      setRecentPhoto(null);
+      // Provide audio feedback
+      const utterance = new SpeechSynthesisUtterance("Photo discarded. You can take another photo.");
+      window.speechSynthesis.speak(utterance);
+    } else {
+      // Provide audio feedback if there's no recent photo
+      const utterance = new SpeechSynthesisUtterance("No recent photo to discard. Please take a photo first.");
+      window.speechSynthesis.speak(utterance);
     }
   };
 
@@ -196,13 +229,12 @@ const VoiceForm: React.FC = () => {
       videoRef.current.srcObject = null;
     }
     setIsCameraOpen(false);
+    setRecentPhoto(null);
+    
+    // Provide audio feedback
+    const utterance = new SpeechSynthesisUtterance("Camera closed.");
+    window.speechSynthesis.speak(utterance);
   };
-
-  useEffect(() => {
-    if (transcript.toLowerCase().includes('take photo')) {
-      takePhoto();
-    }
-  }, [transcript]);
 
   const renderField = (field: keyof FormData) => {
     if (field.startsWith('tireCondition')) {
@@ -240,6 +272,18 @@ const VoiceForm: React.FC = () => {
     );
   };
 
+  // Helper function to convert data URI to Blob
+  const dataURItoBlob = (dataURI: string) => {
+    const byteString = atob(dataURI.split(',')[1]);
+    const mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([ab], { type: mimeString });
+  };
+
   return (
     <Box component="form" sx={{ '& .MuiTextField-root, & .MuiFormControl-root': { m: 1, width: '25ch' } }}>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -269,7 +313,9 @@ const VoiceForm: React.FC = () => {
         Photos captured: {imagePaths.length}
       </Typography>
       <Typography variant="body2" sx={{ mt: 1 }}>
-        Voice commands: "Next" for next field, "Submit" to submit form, "Capture photo" to open camera, "Take photo" to capture a photo
+        Voice commands: "Next" for next field, "Submit" to submit form, "Capture photo" to open camera, 
+        "Take photo" to capture a photo, "Keep photo" to save the photo, "Discard photo" to try again, 
+        "Close camera" to exit camera mode
       </Typography>
       
       <Modal
@@ -293,24 +339,51 @@ const VoiceForm: React.FC = () => {
           <Typography id="camera-preview-modal" variant="h6" component="h2">
             Camera Preview
           </Typography>
-          <Box sx={{ position: 'relative', width: '100%', paddingTop: '75%', overflow: 'hidden' }}>
-            <video 
-              ref={videoRef}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                // objectFit: 'cover',
-              }}
-              autoPlay 
-              playsInline
-            />
-          </Box>
-          <Button variant="contained" onClick={takePhoto} sx={{ mt: 2, mr: 1 }}>
-            Take Photo
-          </Button>
+          {recentPhoto ? (
+            <Box sx={{ width: '100%', paddingTop: '75%', position: 'relative' }}>
+              <img 
+                src={recentPhoto} 
+                alt="Recent capture"
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                }}
+              />
+            </Box>
+          ) : (
+            <Box sx={{ position: 'relative', width: '100%', paddingTop: '75%', overflow: 'hidden' }}>
+              <video 
+                ref={videoRef}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: '100%',
+                }}
+                autoPlay 
+                playsInline
+              />
+            </Box>
+          )}
+          {recentPhoto ? (
+            <>
+              <Button variant="contained" onClick={keepPhoto} sx={{ mt: 2, mr: 1 }}>
+                Keep Photo
+              </Button>
+              <Button variant="contained" onClick={discardPhoto} sx={{ mt: 2, mr: 1 }}>
+                Discard Photo
+              </Button>
+            </>
+          ) : (
+            <Button variant="contained" onClick={takePhoto} sx={{ mt: 2, mr: 1 }}>
+              Take Photo
+            </Button>
+          )}
           <Button variant="contained" onClick={handleCloseCamera} sx={{ mt: 2 }}>
             Close Camera
           </Button>
